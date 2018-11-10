@@ -1,0 +1,132 @@
+<html>
+<head>
+<title>Predicted vs Actual Time Between Clicks</title>
+<script src="https://sdk.amazonaws.com/js/aws-sdk-2.350.0.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script>
+const credentials = new AWS.CognitoIdentityCredentials({ IdentityPoolId: 'us-east-1:522e4e03-27a8-4adf-a2e1-49dbb6771a0f' });
+AWS.config.update({ region: 'us-east-1', credentials, });
+const docClient = new AWS.DynamoDB.DocumentClient();
+
+function scanData() {
+  document.getElementById('plot').style.height = `${document.body.clientHeight}px`;
+  document.getElementById('plot').style.width = `${document.body.clientWidth}px`;
+
+  var params = {
+    TableName: 'test_IOT',
+    ProjectionExpression: 'message',
+  };
+
+  docClient.scan(params, onScan);
+
+  const actuals = [];
+  const predictions = [];
+
+  function eval(data) {
+    data.map(i => { document.getElementById('textarea').innerHTML += i + "\n"; });
+
+    const ddata = {};
+    const bias = 0.01;
+    let btotal = 0;
+
+    let measured = false;
+    for (let i = data.length - 1; i > 0; i--) {
+      const diff = data[i] - data[i - 1];
+      if (i === data.length - 1) {
+        measured = true;
+        actuals.push(Math.round(diff/1000));
+      }
+      const dv = 1 - bias * (data.length - i);
+      if (diff in ddata) ddata[diff] += dv;
+      else ddata[diff] = dv;
+
+      btotal += dv;
+    }
+
+    let wavg = 0;
+    for (const k in ddata) wavg += k * ddata[k]/btotal;
+    wavg = Math.round(Math.round(wavg/1000));
+    if (measured) predictions.push(wavg);
+
+    const type = 'scatter'; //'bar'; //'pointcloud';
+    const visible = true;
+    const mode = 'markers';
+    
+    const x = [];
+    const y = [];
+    const size = [];
+    for(let i = 0; i < actuals.length; i++) {
+      const p = predictions[i];
+      const a = actuals[i];
+
+      const xi = x.reduce((c, v, i) => v === p ? [...c, i] : c, []);
+      const yi = y.reduce((c, v, i) => v === a ? [...c, i] : c, []);
+
+      const mi = xi.filter(i => yi.includes(i));
+      if(mi.length) {
+        mi.map(i => size[i] += 4);
+      }
+      else {
+        x.push(p);
+        y.push(a);
+        size.push(16);
+      }
+    }
+
+    const marker = {size };
+
+    pa = { name:'Predicted vs Actual', x, y, mode, type, marker, }
+   
+    //console.log(actuals);
+    //console.log(predictions);
+
+    let max = 0;
+    for(const i of [...actuals, ...predictions]) max = max > i ? max : i;
+    let min = max;
+    for(const i of [...actuals, ...predictions]) min = min < i ? min : i;
+    const scale = [...Array(max).keys()]; //.slice(min - 1);
+
+    line = { name:'Perfect Prediction', x:scale, y:scale, mode:'lines', type, line: { dash:'dash', width:2, }, }
+
+    layout = {
+      title: 'Predicted Click Delay vs Actual',
+      yaxis: {range:'auto', title:'Predicted (s)'}, 
+      xaxis:{title:'Actual'}, 
+      barmode: 'group',
+    }
+
+    Plotly.newPlot('plot', [pa, line], layout);
+  }
+
+  function onScan(err, data) {
+    if (err) {
+      document.getElementById('textarea').innerHTML += "Unable to scan the table: " + "\n" + JSON.stringify(err, undefined, 2);
+    } else {
+      // Print all the movies
+      document.getElementById('textarea').innerHTML += "Scan succeeded. " + "\n";
+      const m = [];
+      const min = new Date() - 3600000;
+      data.Items.forEach(message => { 
+        const msg = message.message;
+        const t = parseInt(msg, 10); 
+
+        if (t > min) m.push(t);
+      });
+
+      m.sort();
+      console.log(m.length);
+      for (let i = 0; i < m.length; i++) eval(m.slice(0, i));
+    }
+  }
+}
+
+window.onload = scanData;
+
+</script>
+
+</head>
+<body>
+<div id="plot" style="width:600px;height:500px;"></div>
+<textarea readonly id= "textarea" style="width:100%; height:100%"></textarea>
+</body>
+</html>

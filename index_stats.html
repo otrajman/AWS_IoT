@@ -1,0 +1,203 @@
+<html>
+<head>
+
+<script src="https://sdk.amazonaws.com/js/aws-sdk-2.350.0.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script>
+const credentials = new AWS.CognitoIdentityCredentials({
+  IdentityPoolId: 'us-east-1:522e4e03-27a8-4adf-a2e1-49dbb6771a0f'
+});
+
+AWS.config.update({
+  region: 'us-east-1',
+  credentials,
+});
+
+const docClient = new AWS.DynamoDB.DocumentClient();
+
+function scanData() {
+  document.getElementById('plot').style.height = `${document.body.clientHeight}px`;
+  document.getElementById('plot').style.width = `${document.body.clientWidth}px`;
+
+  var params = {
+    TableName: 'test_IOT',
+    ProjectionExpression: 'message',
+  };
+
+  docClient.scan(params, onScan);
+
+  const acts = [];
+  const preds = [];
+
+  function eval(data) {
+    data.map(i => { document.getElementById('textarea').innerHTML += i + "\n"; });
+
+    const ps = data.splice(-1);
+
+    const ddata = {};
+    const bias = 0.01;
+    let btotal = 0;
+    let wavg = 0;
+    let mavg = 0;
+    let maxd = 0;
+    let maxv = 0;
+
+    let measured = false;
+    for (let i = data.length - 1; i > 0; i--) {
+      const diff = data[i] - data[i - 1];
+      if (i === data.length - 1) {
+        measured = true;
+        acts.push(diff);
+      }
+      const dv = 1 - bias * (data.length - i);
+      if (diff in ddata) ddata[diff] += dv;
+      else ddata[diff] = dv;
+
+      if (ddata[diff] > maxv) {
+        maxv = ddata[diff];
+        maxd = diff;
+      }
+
+      btotal += dv;
+      mavg += diff;
+    }
+
+
+    for (const k in ddata) {
+      wavg += k * ddata[k]/btotal;
+    }
+
+    wavg = Math.round(wavg);
+    if (measured) preds.push(wavg);
+
+    //console.log(`${mavg/data.length} ${wavg} ${maxd} ${maxv}`);
+    //console.log(`${JSON.stringify(ddata)}`);
+    //console.log(`${ps} ${data[data.length -1] + wavg}`);
+
+    const type = 'scatter'; //'bar'; //'pointcloud';
+    const visible = true;
+    const mode = 'markers';
+    /*const x = [...Array(acts.length).keys()]
+    ap = {
+      name:'Actual',
+      x,
+      y:acts,
+      error_y: {
+        array: preds.map((p, i) => p - acts[i]),
+        visible,
+        type: 'data',
+      },
+      type, 
+    }
+
+    pp = {
+      name:'Predicted',
+      x,
+      y:preds,
+      type, 
+    }*/
+
+    const x = [];
+    const y = [];
+    const size = [];
+    for(let i = 0; i < acts.length; i++) {
+      const p = preds[i];
+      const a = acts[i];
+
+      const xi = x.reduce((c, v, i) => v === p ? [...c, i] : c, []);
+      const yi = y.reduce((c, v, i) => v === a ? [...c, i] : c, []);
+
+      const mi = xi.filter(i => yi.includes(i));
+      if(mi.length) {
+        mi.map(i => size[i] += 4);
+      }
+      else {
+        x.push(p);
+        y.push(a);
+        size.push(16);
+      }
+    }
+
+    const marker = {size };
+
+    pa = {
+      name:'Predicted vs Actual',
+      x,
+      y,
+      mode,
+      type,
+      marker,
+    }
+
+    let max = 0;
+    for(const i of [...acts, ...preds]) max = max > i ? max : i;
+    let min = max;
+    for(const i of [...acts, ...preds]) min = min < i ? min : i;
+    const scale = [...Array(max).keys()].slice(min - 1);
+
+    line = {
+      name:'Perfect Prediction',
+      x:scale,
+      y:scale,
+      mode:'lines',
+      type,
+      line: {
+        dash:'dash',
+        width:2,
+      },
+    }
+
+    layout = {
+      title: 'Predicted Click Delay vs Actual',
+      yaxis: {range:'auto', title:'Predicted (s)'}, 
+      xaxis:{title:'Actual'}, 
+      barmode: 'group',
+    }
+
+    Plotly.newPlot('plot', [pa, line], layout);
+    //console.log(preds)
+    //console.log(acts);
+  }
+
+  function onScan(err, data) {
+    if (err) {
+      document.getElementById('textarea').innerHTML += "Unable to scan the table: " + "\n" + JSON.stringify(err, undefined, 2);
+    } else {
+      // Print all the movies
+      document.getElementById('textarea').innerHTML += "Scan succeeded. " + "\n";
+      const m = [];
+      const min = new Date() - 3600000;
+      data.Items.forEach(message => { 
+        const msg = message.message;
+        //const t = Math.round(parseFloat(msg.slice(8), 10) / 10);
+        const t = parseInt(msg, 10); //Math.round(parseFloat(msg.slice(8), 10) / 10);
+
+        if (t > min) m.push(t);
+        //document.getElementById('textarea').innerHTML += JSON.stringify(message) + "\n";
+      });
+
+      m.sort();
+      console.log(m.length);
+      for (let i = 0; i < m.length; i++) {
+        //setTimeout(() => { eval(m.slice(0, i)) }, i * 10);
+        eval(m.slice(0, i));
+      }
+
+      //Continue scanning if we have more movies (per scan 1MB limitation)
+      //document.getElementById('textarea').innerHTML += "Scanning for more..." + "\n";
+      //params.ExclusiveStartKey = data.LastEvaluatedKey;
+      //setTimeout(() => { docClient.scan(params, onScan) }, 1000);
+    }
+  }
+}
+
+window.onload = scanData;
+
+</script>
+
+</head>
+<body>
+<div id="plot" style="width:600px;height:500px;"></div>
+<textarea readonly id= "textarea" style="width:100%; height:100%"></textarea>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<html>
+<head>
+
+<script src="https://sdk.amazonaws.com/js/aws-sdk-2.350.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@0.13.3/dist/tf.min.js"> </script>
+<script>
+const credentials = new AWS.CognitoIdentityCredentials({
+  IdentityPoolId: 'us-east-1:522e4e03-27a8-4adf-a2e1-49dbb6771a0f'
+});
+
+AWS.config.update({
+  region: 'us-east-1',
+  credentials,
+});
+
+const docClient = new AWS.DynamoDB.DocumentClient();
+
+function scanData() {
+    document.getElementById('textarea').innerHTML += "Scanning Movies table." + "\n";
+
+    var params = {
+        TableName: 'test_IOT',
+        ProjectionExpression: 'message',
+    };
+
+    docClient.scan(params, onScan);
+
+    async function onScan(err, data) {
+        if (err) {
+            document.getElementById('textarea').innerHTML += "Unable to scan the table: " + "\n" + JSON.stringify(err, undefined, 2);
+        } else {
+            // Print all the movies
+            document.getElementById('textarea').innerHTML += "Scan succeeded. " + "\n";
+            const m = [];
+            data.Items.forEach(message => { 
+              const msg = message.message;
+              const t = Math.round(parseFloat(msg.slice(8), 10) / 10);
+              m.push(t);
+              //document.getElementById('textarea').innerHTML += JSON.stringify(message) + "\n";
+              document.getElementById('textarea').innerHTML += t + "\n";
+            });
+
+            m.sort();
+
+            const ps = m.splice(-2);
+
+            const xd = [];
+            const yd = [];
+            m.forEach(t => {
+                if (xd.length) {
+                  const s = xd[xd.length - 1];
+                  for(let i = s + 1; i < t; i++) {
+                    xd.push(i);
+                    yd.push(0);
+                  }
+                }
+
+                xd.push(t);
+                yd.push(1);
+
+            });
+
+            // Define a model for linear regression.
+            const model = tf.sequential();
+            //model.add(tf.layers.dense({units: 1, inputShape: [1], activation:'linear'}));
+
+            // Prepare the model for training: Specify the loss and the optimizer.
+            //model.compile({loss: 'meanSquaredError', optimizer: 'sgd'});
+
+            const inputShape = [1];
+            const max_batch = 1000;
+            const epochs = 10;
+            const units = 50;
+            
+            model.add(tf.layers.dense({
+              units,
+              inputShape,
+              activation: 'relu',
+            }))
+
+            //model.add(tf.layers.dense({ units, activation : 'relu', }))
+
+            model.add(tf.layers.dense({
+              units: 1,
+              activation :'sigmoid',
+            }))
+
+            model.compile({
+              optimizer: 'adam', 
+              //optimizer: tf.train.sgd(0.1),
+              loss: 'binaryCrossentropy', 
+              //loss: 'meanSquaredError',
+            });
+
+            // Train the model using the data.
+            while(xd.length) {
+              const batchSize = xd.length < max_batch ? xd.length : max_batch;
+              const xs = tf.tensor1d(xd.splice(0, batchSize));
+              const ys = tf.tensor1d(yd.splice(0, batchSize));
+
+              await model.fit(xs, ys, {batchSize, epochs} );// .then(() => {
+            }
+
+            tf.tidy(() => {
+              for (let i = ps[0] - 5; i < ps[ps.length - 1] + 5; i++) {
+                const pred = model.predict(tf.tensor2d([i], [1,1]));
+                const b = pred.dataSync()[0];
+                console.log(`${i} ${b === 1} ${xd.includes(i) || ps.includes(i)}`);
+              }
+            });    
+
+            //Continue scanning if we have more movies (per scan 1MB limitation)
+            //document.getElementById('textarea').innerHTML += "Scanning for more..." + "\n";
+            //params.ExclusiveStartKey = data.LastEvaluatedKey;
+            //setTimeout(() => { docClient.scan(params, onScan) }, 1000);
+        }
+    }
+}
+
+window.onload = scanData;
+
+</script>
+
+</head>
+<body>
+<textarea readonly id= "textarea" style="width:400px; height:800px"></textarea>
+</body>
+</html>
